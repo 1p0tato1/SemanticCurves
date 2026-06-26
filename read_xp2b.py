@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-path = "microsoft_phi-3-mini-4k-instruct_xp2_shrink.csv"
+path = "res/microsoft_phi-3-mini-4k-instruct_xp2_sigma.csv"
 
 df = pd.read_csv(path)
 df = df.rename(columns={"energy": "correlation"})
@@ -71,5 +71,5 @@ plt.legend(title="Layer")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 
-plt.savefig("correlation_across_layers.pdf", format="pdf", bbox_inches="tight")
+plt.savefig("plots/correlation_across_layers.pdf", format="pdf", bbox_inches="tight")
 plt.show()

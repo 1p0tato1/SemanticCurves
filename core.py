@@ -234,6 +234,43 @@ def dtw_distance(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
 
     return torch.sqrt(dp[a, b] + 1e-12)
 
+def set_energy_distance(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    sigma: float = 1.0,
+    norm: bool = True,
+    eps: float = 1e-25,
+) -> torch.Tensor:
+    X = X.float()
+    Y = Y.float()
+
+    if norm:
+        X = F.normalize(X, dim=-1)
+        Y = F.normalize(Y, dim=-1)
+
+        dist2_x = (2.0 - 2.0 * (X @ X.T)).clamp_min_(0.0)
+        dist2_y = (2.0 - 2.0 * (Y @ Y.T)).clamp_min_(0.0)
+    else:
+        x2 = (X * X).sum(dim=1, keepdim=True)
+        y2 = (Y * Y).sum(dim=1, keepdim=True)
+
+        dist2_x = (x2 + x2.T - 2.0 * (X @ X.T)).clamp_min_(0.0)
+        dist2_y = (y2 + y2.T - 2.0 * (Y @ Y.T)).clamp_min_(0.0)
+
+    inv_sigma = 1.0 / (sigma + eps)
+
+    KX = torch.softmax(-dist2_x * inv_sigma, dim=1)
+    KY = torch.softmax(-dist2_y * inv_sigma, dim=1)
+
+    X_smooth = KX @ X
+    Y_smooth = KY @ Y
+
+    Dxy = torch.cdist(X_smooth, Y_smooth, p=2).mean()
+    Dxx = torch.cdist(X_smooth, X_smooth, p=2).mean()
+    Dyy = torch.cdist(Y_smooth, Y_smooth, p=2).mean()
+
+    return 2.0 * Dxy - Dxx - Dyy
+
 
 def inv_distance(fn):
     def wrapped(X, Y):
