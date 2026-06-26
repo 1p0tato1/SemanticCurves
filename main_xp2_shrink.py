@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+from typing import List
 
 import numpy as np
 from tqdm import tqdm
@@ -9,11 +10,9 @@ import torch
 
 from core import (
     load_model_and_tokenizer,
-    raw_token_trajectory,
     DATASET_LOADERS,
     DATASET_TASK,
     pearsonr_safe,
-    # base metrics used inside shrink wrappers
     mean_pool_cosine,
     endpoint_distance,
     l2_aligned_distance,
@@ -22,9 +21,13 @@ from core import (
     dtw_distance,
     hausdorff_distance,
     chamfer_distance,
+    trajectory_from_hidden_states,
+    get_hidden_states_batch,
+    auc_safe
 )
 
 MAX_LEN = 128
+BATCH_SIZE = 16
 
 # Fixed seed for reproducibility
 SEED = 42
@@ -44,17 +47,13 @@ MODEL_ALIASES = {
 # XP2-specific constants
 # ========================================================
 
-TAUS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]   # tau grid in [0,1]
+TAUS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 H1_LAMBDA = 0.5
-layer_indices = [-1, -2]
 
 
 def get_layer_indices_for_model(model_key: str):
     """
     Choose layers depending on the short model name.
-
-    - For phi (phi-3-mini): use [-25, -10, 0]
-    - For others: use the last two layers [-1, -2]
     """
     model_key = model_key.lower()
     if model_key == "phi":
@@ -70,13 +69,6 @@ def get_layer_indices_for_model(model_key: str):
 def shrink_traj(X: torch.Tensor, tau: float) -> torch.Tensor:
     """
     Mean-preserving shrink around the token-wise mean.
-
-    mu = mean over tokens (per dimension)
-    f_tau(X_i) = mu + (1 - tau) * (X_i - mu)
-
-    tau in [0, 1]:
-      tau = 0 -> identity (no change)
-      tau = 1 -> trajectory collapses to mu
     """
     mu = X.mean(dim=0, keepdim=True)
     return mu + (1.0 - tau) * (X - mu)
@@ -92,10 +84,7 @@ def inverse_distance(x: torch.Tensor, eps: float = 1e-12) -> float:
 
 def make_shrink_metrics(tau: float):
     """
-    Build a dictionary of metrics after shrink for a given tau,
-    reusing the base distances from core.py.
-
-    Returns a dict of callables that take (X, Y) and return floats.
+    Build a dictionary of metrics after shrink for a given tau.
     """
 
     def cos_f(X, Y):
@@ -173,7 +162,13 @@ def parse_args():
         "--results_dir",
         type=str,
         default="results_layers",
-        help="Directory where CSV results will be stored (same as XP1 by default).",
+        help="Directory where CSV results will be stored.",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=16,
+        help="Batch size for model forward passes.",
     )
     return parser.parse_args()
 
@@ -190,74 +185,139 @@ def append_results_csv(
     layer: int,
     dataset_name: str,
     tau: float,
+    task_type: str,  # Add this
     metric_corrs: dict,
 ):
     file_exists = os.path.isfile(csv_path)
     with open(csv_path, mode="a", newline="") as f:
         writer = csv.writer(f)
         if not file_exists:
-            header = ["model", "layer", "dataset", "tau"] + list(metric_corrs.keys())
+            header = ["model", "layer", "dataset", "task", "tau"] + list(metric_corrs.keys())
             writer.writerow(header)
 
-        row = [model_name, layer, dataset_name, tau] + [
+        row = [model_name, layer, dataset_name, task_type, tau] + [
             metric_corrs[m] for m in metric_corrs.keys()
         ]
         writer.writerow(row)
 
 
 # ============================================================
-# Evaluation core (XP2 shrink)
+# Optimized evaluation with batch processing
 # ============================================================
 
+def process_batch_hidden_states(
+        batch_texts: list,
+        tok,
+        lm,
+        is_decoder_only: bool,
+) -> list:
+    """
+    Process a batch of texts and return their hidden states.
+    """
+    # Get all hidden states for the batch
+    hidden_states_list = get_hidden_states_batch(
+        batch_texts, tok, lm, is_decoder_only, MAX_LEN
+    )
+    return hidden_states_list
+
+
 def evaluate_dataset_xp2_shrink(
-    dataset_name: str,
-    tok,
-    lm,
-    is_decoder_only: bool,
-    layer: int,
+        dataset_name: str,
+        tok,
+        lm,
+        is_decoder_only: bool,
+        layer_indices: List[int],
+        batch_size: int = 16,
 ) -> dict:
     """
-    For a given dataset and layer:
-      - cache trajectories (score, X, Y)
-      - for each tau in TAUS:
-          * compute shrink metrics for all pairs
-          * compute Pearson correlation of each metric with scores
-      - return a dict: tau -> {metric_name: correlation}
+    Optimized version: cache hidden states once and process in batches.
+    Now with task-aware evaluation (Pearson for regression, AUC for binary).
     """
     ds = DATASET_LOADERS[dataset_name]()
-    task = DATASET_TASK[dataset_name]
+    task_type = DATASET_TASK[dataset_name]  # Get task type
+    print(f"Task type for {dataset_name}: {task_type}")
 
-    cache = []
-    for ex in tqdm(ds, desc=f"XP2 SHRINK | cache {dataset_name} | layer {layer}"):
-        s1, s2, score = ex["text1"], ex["text2"], ex["score"]
-        X = raw_token_trajectory(s1, tok, lm, is_decoder_only, MAX_LEN, layer)
-        Y = raw_token_trajectory(s2, tok, lm, is_decoder_only, MAX_LEN, layer)
-        cache.append((score, X, Y))
+    print(f"XP2 SHRINK | Caching hidden states for {dataset_name} (batch_size={batch_size})")
 
-    tau_to_metric_corrs = {}
+    cached_data = []
+    batch_size = min(batch_size, len(ds))
 
-    for tau in TAUS:
-        shrink_metrics = make_shrink_metrics(tau)
-        metric_values = {name: [] for name in shrink_metrics.keys()}
-        scores = []
+    for i in tqdm(range(0, len(ds), batch_size), desc=f"Batch processing {dataset_name}"):
+        batch = ds[i:i + batch_size]
 
-        for score, X, Y in tqdm(cache, desc=f"XP2 SHRINK | {dataset_name} | layer {layer} | tau {tau}"):
-            scores.append(float(score))
-            for name, fn in shrink_metrics.items():
-                val = fn(X, Y)
-                metric_values[name].append(val)
+        texts1 = [ex["text1"] for ex in batch]
+        texts2 = [ex["text2"] for ex in batch]
+        scores = [ex["score"] for ex in batch]
 
-        scores_arr = np.array(scores, dtype=np.float64)
+        hs1_list, attn1_list, ids1_list = process_batch_hidden_states(
+            texts1, tok, lm, is_decoder_only
+        )
+        hs2_list, attn2_list, ids2_list = process_batch_hidden_states(
+            texts2, tok, lm, is_decoder_only
+        )
 
-        metric_corrs = {}
-        for name in shrink_metrics.keys():
-            preds = np.array(metric_values[name], dtype=np.float64)
-            corr = pearsonr_safe(preds, scores_arr)
-            metric_corrs[name] = corr
+        for j in range(len(batch)):
+            cached_data.append((
+                texts1[j],
+                texts2[j],
+                scores[j],
+                hs1_list[j],
+                attn1_list[j],
+                ids1_list[j],
+                hs2_list[j],
+                attn2_list[j],
+                ids2_list[j],
+            ))
 
-        tau_to_metric_corrs[tau] = metric_corrs
+    results = {}
 
-    return tau_to_metric_corrs
+    for layer in layer_indices:
+        print(f"XP2 SHRINK | Processing layer {layer} for {dataset_name}")
+
+        layer_cache = []
+        for data in tqdm(cached_data, desc=f"Building trajectories for layer {layer}"):
+            (text1, text2, score,
+             hs1, attn1, ids1,
+             hs2, attn2, ids2) = data
+
+            X = trajectory_from_hidden_states(hs1, attn1, ids1, tok, layer)
+            Y = trajectory_from_hidden_states(hs2, attn2, ids2, tok, layer)
+            layer_cache.append((score, X, Y))
+
+        tau_to_metric_corrs = {}
+
+        for tau in TAUS:
+            shrink_metrics = make_shrink_metrics(tau)
+            metric_values = {name: [] for name in shrink_metrics.keys()}
+            scores = []
+
+            for score, X, Y in tqdm(layer_cache, desc=f"tau={tau}"):
+                scores.append(float(score))
+                for name, fn in shrink_metrics.items():
+                    val = fn(X, Y)
+                    metric_values[name].append(val)
+
+            scores_arr = np.array(scores, dtype=np.float64)
+
+            metric_corrs = {}
+            for name in shrink_metrics.keys():
+                preds = np.array(metric_values[name], dtype=np.float64)
+
+                if task_type == "regression":
+                    corr = pearsonr_safe(preds, scores_arr)
+                elif task_type == "binary":
+                    preds_norm = (preds - preds.min()) / (preds.max() - preds.min() + 1e-12)
+                    corr = auc_safe(scores_arr, preds_norm)
+                else:
+                    corr = pearsonr_safe(preds, scores_arr)
+
+                metric_corrs[name] = corr
+
+            tau_to_metric_corrs[tau] = metric_corrs
+
+        results[layer] = tau_to_metric_corrs
+
+    return results
 
 
 # ============================================================
@@ -278,21 +338,32 @@ def main():
     )
 
     layer_indices = get_layer_indices_for_model(args.model)
-    print(f"Evaluating XP2 SHRINK for model {hf_model_name} on layers : {layer_indices}")
+    batch_size = args.batch_size
 
+    print(f"Evaluating XP2 SHRINK for model {hf_model_name} on layers: {layer_indices}")
     print(f"TAUS = {TAUS}, H1_LAMBDA = {H1_LAMBDA}")
+    print(f"Batch size = {batch_size}")
 
     csv_path = make_results_path(args.results_dir, hf_model_name)
 
-    for layer in layer_indices:
-        for dataset_name in ["stsb"]: #["stsb", "sick", "paws"]
-            tau_to_metric_corrs = evaluate_dataset_xp2_shrink(
-                dataset_name,
-                tok,
-                lm,
-                is_decoder_only,
-                layer,
-            )
+    # Evaluate each dataset
+    for dataset_name in ["stsb", "sick", "paws"]:
+        task_type = DATASET_TASK[dataset_name]
+        print(f"\n{'=' * 60}")
+        print(f"Evaluating dataset: {dataset_name}")
+        print(f"{'=' * 60}")
+
+        layer_results = evaluate_dataset_xp2_shrink(
+            dataset_name,
+            tok,
+            lm,
+            is_decoder_only,
+            layer_indices,
+            batch_size,
+        )
+
+        # Write results to CSV
+        for layer, tau_to_metric_corrs in layer_results.items():
             for tau, metric_corrs in tau_to_metric_corrs.items():
                 append_results_csv(
                     csv_path,
@@ -300,6 +371,7 @@ def main():
                     layer,
                     dataset_name,
                     tau,
+                    task_type,
                     metric_corrs,
                 )
                 print(f"[Model: {args.model}] layer {layer} dataset {dataset_name} tau={tau} -> {metric_corrs}")

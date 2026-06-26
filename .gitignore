@@ -37,6 +37,6 @@ Thumbs.db
 # Project outputs
 results_layers/*.csv
 
-#notebooks
+#notebooks + some py files
 *.ipynb
-
+eval_curves.py
