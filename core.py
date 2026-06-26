@@ -277,50 +277,6 @@ def normalize_sick(score: float) -> float:
 def normalize_binary(score: float) -> float:
     return float(score)
 
-"""
-def load_stsb(split: str = "validation") -> List[Dict]:
-    ds = load_dataset("glue", "stsb", split=split)
-    return [
-        {
-            "text1": ex["sentence1"],
-            "text2": ex["sentence2"],
-            "score": normalize_stsb(float(ex["label"])),
-        }
-        for ex in ds
-    ]
-
-
-def load_sickr(split: str = "test") -> List[Dict]:
-    ds = load_dataset("mteb/sickr-sts", split=split)
-    return [
-        {
-            "text1": ex["sentence1"],
-            "text2": ex["sentence2"],
-            "score": normalize_sick(float(ex["score"])),
-        }
-        for ex in ds
-    ]
-
-
-def load_paws(split: str = "test") -> List[Dict]:
-    ds = load_dataset("paws", "labeled_final", split=split)
-    return [
-        {
-            "text1": ex["sentence1"],
-            "text2": ex["sentence2"],
-            "score": normalize_binary(float(ex["label"])),
-        }
-        for ex in ds
-    ]
-
-
-DATASET_LOADERS = {
-    "stsb": lambda: load_stsb("validation"),
-    "sick": lambda: load_sickr("test"),
-    "paws": lambda: load_paws("test"),
-}
-"""
-
 def load_stsb(split: str = "test") -> List[Dict]:
     ds = load_dataset("sentence-transformers/stsb", split=split)
     return [
@@ -424,3 +380,90 @@ def get_layer_indices(config, user_layers_str: str) -> List[int]:
 
     # Example: for 12 layers, this returns [-1, -2, ..., -12]
     return [-(i + 1) for i in range(num_layers)]
+
+# ============================================================
+# Helpers
+# ============================================================
+# Add to core.py
+
+@torch.no_grad()
+def get_hidden_states_batch(
+        texts: List[str],
+        tok,
+        lm,
+        is_decoder_only: bool,
+        max_len: int,
+) -> Tuple[List[tuple], List[torch.Tensor], List[torch.Tensor]]:
+    """
+    Get hidden states for multiple texts in one batch.
+
+    Returns:
+        - hidden_states_list: List of hidden state tuples (one per text)
+        - attention_masks_list: List of attention masks
+        - input_ids_list: List of input IDs
+    """
+    batch = tok(
+        texts,
+        return_tensors="pt",
+        truncation=True,
+        max_length=max_len,
+        padding=True,
+    )
+    batch = {k: v.to(device) for k, v in batch.items()}
+
+    forward_kwargs = dict(
+        **batch,
+        output_hidden_states=True,
+        return_dict=True,
+    )
+    if is_decoder_only:
+        forward_kwargs["use_cache"] = False
+
+    outputs = lm(**forward_kwargs)
+
+    batch_size = batch["input_ids"].shape[0]
+    hidden_states_list = []
+    attention_masks_list = []
+    input_ids_list = []
+
+    for i in range(batch_size):
+        text_hidden_states = tuple(hs[i:i + 1] for hs in outputs.hidden_states)
+        hidden_states_list.append(text_hidden_states)
+        attention_masks_list.append(batch["attention_mask"][i].bool())
+        input_ids_list.append(batch["input_ids"][i])
+
+    return hidden_states_list, attention_masks_list, input_ids_list
+
+@torch.no_grad()
+def trajectory_from_hidden_states(
+    hidden_states,
+    attention_mask: torch.Tensor,
+    input_ids: torch.Tensor,
+    tok,
+    layer: int,
+) -> torch.Tensor:
+    """
+    Build a normalized trajectory for ONE chosen layer,
+    using stored hidden_states instead of running the model again.
+    """
+    H = hidden_states[layer][0]  # [L, D]
+    attn = attention_mask        # [L]
+    ids = input_ids              # [L]
+
+    mask = attn.clone()
+
+    special_ids = set(tok.all_special_ids)
+    if len(special_ids) > 0:
+        special_mask = torch.zeros_like(mask)
+        for sid in special_ids:
+            special_mask |= (ids == sid)
+        mask &= ~special_mask
+
+    X = H[mask]
+    X = F.normalize(X, p=2, dim=-1)
+
+    if X.shape[0] == 0:
+        X = H[attn]
+        X = F.normalize(X, p=2, dim=-1)
+
+    return X
