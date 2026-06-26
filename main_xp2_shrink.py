@@ -58,7 +58,7 @@ def get_layer_indices_for_model(model_key: str):
     """
     model_key = model_key.lower()
     if model_key == "phi":
-        return [-25, -10, 0]
+        return [-25, -10, -1, 0]
     else:
         return [-1, -2]
 
