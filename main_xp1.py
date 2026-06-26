@@ -19,6 +19,7 @@ from core import (
 )
 
 MAX_LEN = 128
+DATASETS = ["stsb", "sick", "paws"]
 
 # fiwed seed for reproducibility
 SEED = 42
@@ -145,7 +146,7 @@ def main():
     csv_path = make_results_path(args.results_dir, hf_model_name)
 
     for layer in layer_indices:
-        for dataset_name in ["stsb", "sick", "paws"]:
+        for dataset_name in DATASETS:
             task = DATASET_TASK[dataset_name]
             metrics_results = evaluate_dataset_xp1(
                 dataset_name,

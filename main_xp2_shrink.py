@@ -28,6 +28,7 @@ from core import (
 
 MAX_LEN = 128
 BATCH_SIZE = 16
+DATASETS = ["stsb", "sick", "paws"]
 
 # Fixed seed for reproducibility
 SEED = 42
@@ -347,7 +348,7 @@ def main():
     csv_path = make_results_path(args.results_dir, hf_model_name)
 
     # Evaluate each dataset
-    for dataset_name in ["stsb", "sick", "paws"]:
+    for dataset_name in DATASETS:
         task_type = DATASET_TASK[dataset_name]
         print(f"\n{'=' * 60}")
         print(f"Evaluating dataset: {dataset_name}")
