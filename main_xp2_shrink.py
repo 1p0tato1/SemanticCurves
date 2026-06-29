@@ -62,7 +62,7 @@ def get_layer_indices_for_model(model_key: str):
     elif model_key == "qwen":
         return [-22, -6, -1, 0]
     elif model_key == "bert":
-        return [-23, -6, -1, 0]
+        return [-6, -3, -1, 0]
 
 
 # ============================================================
