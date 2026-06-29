@@ -59,8 +59,10 @@ def get_layer_indices_for_model(model_key: str):
     model_key = model_key.lower()
     if model_key == "phi":
         return [-25, -10, -1, 0]
-    else:
-        return [-1, -2]
+    elif model_key == "qwen":
+        return [-22, -6, -1, 0]
+    elif model_key == "bert":
+        return [-23, -6, -1, 0]
 
 
 # ============================================================
@@ -162,7 +164,7 @@ def parse_args():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="results_layers",
+        default="results",
         help="Directory where CSV results will be stored.",
     )
     parser.add_argument(
