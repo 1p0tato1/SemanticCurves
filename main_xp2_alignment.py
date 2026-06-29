@@ -24,7 +24,7 @@ from core import (
     chamfer_distance,
     trajectory_from_hidden_states,
     get_hidden_states_batch,
-    _aligned_pair,  # Need this for custom alignment
+    _aligned_pair,
 )
 
 MAX_LEN = 128
@@ -55,12 +55,16 @@ H1_LAMBDA = 0.5
 
 
 def get_layer_indices_for_model(model_key: str):
-    """Choose layers depending on the short model name."""
+    """
+    Choose layers depending on the short model name.
+    """
     model_key = model_key.lower()
     if model_key == "phi":
         return [-25, -10, -1, 0]
-    else:
-        return [-1, -2]
+    elif model_key == "qwen":
+        return [-22, -6, -1, 0]
+    elif model_key == "bert":
+        return [-23, -6, -1, 0]
 
 
 # ============================================================
@@ -135,15 +139,13 @@ def make_aligned_metrics(T: int):
         return 1.0 / (float(chamfer_distance(X, Y).cpu()) + 1e-12)
 
     return {
-        # Non-aligned metrics (these don't change with T)
         "cos_f": cos_f,
         "inv_endpoint_f": inv_endpoint_f,
-        "inv_dtw_f": inv_dtw_f,
         "inv_haus_f": inv_haus_f,
         "inv_cham_f": inv_cham_f,
 
-        # Aligned metrics (these depend on T)
         "inv_l2_f": inv_l2_T,
+        "inv_dtw_f": inv_dtw_f,
         "inv_linf_f": inv_linf_T,
         "inv_h1_f": inv_h1_T,
     }
@@ -152,7 +154,6 @@ def make_aligned_metrics(T: int):
 # ============================================================
 # Args & results
 # ============================================================
-
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -171,7 +172,7 @@ def parse_args():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="results_layers",
+        default="results",
         help="Directory where CSV results will be stored.",
     )
     parser.add_argument(
@@ -214,7 +215,6 @@ def append_results_csv(
 # ============================================================
 # Evaluation with batch processing
 # ============================================================
-
 def process_batch_hidden_states(
         batch_texts: list,
         tok,
