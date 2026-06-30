@@ -35,8 +35,9 @@ htmlcov/
 Thumbs.db
 
 # Project outputs
-results_layers/*.csv
+results/
+results/*.csv
 
 #notebooks + some py files
-*.ipynb
+notebooks/*.ipynb
 eval_curves.py
