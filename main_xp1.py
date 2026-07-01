@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="results_layers",
+        default="results",
         help="Directory where CSV results will be stored.",
     )
     return parser.parse_args()

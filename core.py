@@ -15,6 +15,9 @@ from transformers import (
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+if torch.backends.mps.is_available():
+    device = "mps"
+
 os.environ["HTTP_PROXY"] = "http://cache.univ-st-etienne.fr:3128/"
 os.environ["HTTPS_PROXY"] = "http://cache.univ-st-etienne.fr:3128/"
 
@@ -37,28 +40,28 @@ def load_model_and_tokenizer(model_name: str, hf_token: str = None):
             tok.add_special_tokens({"pad_token": "[PAD]"})
 
     common_kwargs = {}
-    if device == "cuda":
-        common_kwargs["torch_dtype"] = torch.float16
 
     if is_decoder_only:
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
             token=hf_token,
-            device_map="auto" if device == "cuda" else None,
+            dtype=torch.float32,
             **common_kwargs,
         )
     else:
         model = AutoModel.from_pretrained(
             model_name,
             token=hf_token,
+            dtype=torch.float32,
             **common_kwargs,
         )
-        model.to(device)
 
     # if tokenizer size changed because of added pad token
     if len(tok) != model.get_input_embeddings().num_embeddings:
         model.resize_token_embeddings(len(tok))
 
+    model = model.to(device)
+    model = model.float()
     model.eval()
     return tok, model, is_decoder_only, config
 
