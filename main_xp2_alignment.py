@@ -28,8 +28,8 @@ from core import (
 )
 
 MAX_LEN = 128
-BATCH_SIZE = 16
-DATASETS = ["stsb", "sick", "paws"]
+BATCH_SIZE = 8
+DATASETS = ["paws"]
 
 # Fixed seed for reproducibility
 SEED = 42
@@ -223,7 +223,7 @@ def process_batch_hidden_states(
 ) -> list:
     """Process a batch of texts and return their hidden states."""
     hidden_states_list = get_hidden_states_batch(
-        batch_texts, tok, lm, is_decoder_only, MAX_LEN
+        batch_texts, tok, lm, is_decoder_only, MAX_LEN,put_cpu = True
     )
     return hidden_states_list
 

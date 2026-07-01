@@ -70,14 +70,14 @@ for dataset in ["stsb", "paws", "sick"]:
     # Rename metric columns for LaTeX
     df_latex = df_latex.rename(columns=metric_names)
 
-    tex_path = f"phi3_{dataset}_layers_table.tex"
+    tex_path = f"phi_{dataset}_layers_table.tex"
 
     latex_table = df_latex.to_latex(
         index=False,
         escape=False,
         longtable=True,
-        caption=f"Layer-wise results on {dataset.upper()} for microsoft/phi-3-mini-4k-instruct.",
-        label=f"tab:phi3_{dataset}_layers",
+        caption=f"Layer-wise results on {dataset.upper()} for Qween",
+        label=f"tab:phi_{dataset}_layers",
     )
 
     with open("tex/"+tex_path, "w") as f:
@@ -141,7 +141,7 @@ for dataset in ["stsb", "paws", "sick"]:
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    plot_path = f"phi3_{dataset}_layers_plot.pdf"
+    plot_path = f"phi_{dataset}_layers_plot.pdf"
     plt.savefig("plots/"+plot_path, bbox_inches="tight")
     plt.close()
 

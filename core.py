@@ -429,7 +429,7 @@ def get_hidden_states_batch(
         tok,
         lm,
         is_decoder_only: bool,
-        max_len: int,
+        max_len: int
 ) -> Tuple[List[tuple], List[torch.Tensor], List[torch.Tensor]]:
     """
     Get hidden states for multiple texts in one batch.
@@ -444,7 +444,7 @@ def get_hidden_states_batch(
         return_tensors="pt",
         truncation=True,
         max_length=max_len,
-        padding=True,
+        padding=True
     )
     batch = {k: v.to(device) for k, v in batch.items()}
 
@@ -456,7 +456,8 @@ def get_hidden_states_batch(
     if is_decoder_only:
         forward_kwargs["use_cache"] = False
 
-    outputs = lm(**forward_kwargs)
+    with torch.no_grad():
+        outputs = lm(**forward_kwargs)
 
     batch_size = batch["input_ids"].shape[0]
     hidden_states_list = []
@@ -464,10 +465,10 @@ def get_hidden_states_batch(
     input_ids_list = []
 
     for i in range(batch_size):
-        text_hidden_states = tuple(hs[i:i + 1] for hs in outputs.hidden_states)
+        text_hidden_states = tuple(hs[i:i + 1].cpu() for hs in outputs.hidden_states)
         hidden_states_list.append(text_hidden_states)
-        attention_masks_list.append(batch["attention_mask"][i].bool())
-        input_ids_list.append(batch["input_ids"][i])
+        attention_masks_list.append(batch["attention_mask"][i].bool().cpu())
+        input_ids_list.append(batch["input_ids"][i].cpu())
 
     return hidden_states_list, attention_masks_list, input_ids_list
 
