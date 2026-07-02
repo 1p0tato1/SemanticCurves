@@ -37,6 +37,7 @@ Thumbs.db
 # Project outputs
 results/
 results/*.csv
+saved_embeddings/
 
 #notebooks + some py files
 notebooks/*.ipynb

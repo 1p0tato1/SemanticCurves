@@ -16,20 +16,18 @@ from core import (
     auc_safe,
     mean_pool_cosine,
     endpoint_distance,
-    l2_aligned_distance,
-    linf_aligned_distance,
-    h1_aligned_distance,
     dtw_distance,
     hausdorff_distance,
     chamfer_distance,
     trajectory_from_hidden_states,
     get_hidden_states_batch,
     _aligned_pair,
+    get_or_generate_embeddings,
 )
 
 MAX_LEN = 128
-BATCH_SIZE = 8
-DATASETS = ["paws"]
+BATCH_SIZE = 16
+DATASETS = ["stsb", "sick", "paws"]
 
 # Fixed seed for reproducibility
 SEED = 42
@@ -65,6 +63,8 @@ def get_layer_indices_for_model(model_key: str):
         return [-22, -6, -1, 0]
     elif model_key == "bert":
         return [-6, -3, -1, 0]
+    else:
+        raise ValueError(f"Unknown model key: {model_key}")
 
 
 # ============================================================
@@ -235,47 +235,22 @@ def evaluate_dataset_xp2_alignment(
         is_decoder_only: bool,
         layer_indices: List[int],
         batch_size: int = 16,
+        model_key: str = None,
+        max_len: int = 128,
 ) -> dict:
-    """
-    Evaluate the effect of varying alignment length T.
-    Cache hidden states once, then test different T values.
-    """
-    ds = DATASET_LOADERS[dataset_name]()
+
     task_type = DATASET_TASK[dataset_name]
     print(f"Task type for {dataset_name}: {task_type}")
 
-    # Step 1: Cache all hidden states (same as XP2)
-    print(f"XP2 ALIGNMENT | Caching hidden states for {dataset_name} (batch_size={batch_size})")
-
-    cached_data = []
-    batch_size = min(batch_size, len(ds))
-
-    for i in tqdm(range(0, len(ds), batch_size), desc=f"Batch processing {dataset_name}"):
-        batch = ds[i:i + batch_size]
-
-        texts1 = [ex["text1"] for ex in batch]
-        texts2 = [ex["text2"] for ex in batch]
-        scores = [ex["score"] for ex in batch]
-
-        hs1_list, attn1_list, ids1_list = process_batch_hidden_states(
-            texts1, tok, lm, is_decoder_only
-        )
-        hs2_list, attn2_list, ids2_list = process_batch_hidden_states(
-            texts2, tok, lm, is_decoder_only
-        )
-
-        for j in range(len(batch)):
-            cached_data.append((
-                texts1[j],
-                texts2[j],
-                scores[j],
-                hs1_list[j],
-                attn1_list[j],
-                ids1_list[j],
-                hs2_list[j],
-                attn2_list[j],
-                ids2_list[j],
-            ))
+    cached_data = get_or_generate_embeddings(
+        model_key,
+        dataset_name,
+        tok,
+        lm,
+        is_decoder_only,
+        batch_size,
+        max_len
+    )
 
     results = {}
 
@@ -373,6 +348,7 @@ def main():
             is_decoder_only,
             layer_indices,
             batch_size,
+            model_key=args.model,
         )
 
         for layer, T_to_metric_corrs in layer_results.items():

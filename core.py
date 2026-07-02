@@ -1,10 +1,12 @@
 import os
+import pickle
 from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
+from tqdm import tqdm
 from sklearn.metrics import roc_auc_score
 from transformers import (
     AutoConfig,
@@ -17,6 +19,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 if torch.backends.mps.is_available():
     device = "mps"
+
+EMBEDDINGS_DIR = "saved_embeddings"
+MAX_LEN_CACHE = 128
 
 os.environ["HTTP_PROXY"] = "http://cache.univ-st-etienne.fr:3128/"
 os.environ["HTTPS_PROXY"] = "http://cache.univ-st-etienne.fr:3128/"
@@ -507,3 +512,89 @@ def trajectory_from_hidden_states(
         X = F.normalize(X, p=2, dim=-1)
 
     return X
+
+
+# ============================================================
+# Embeddings cache management
+# ============================================================
+
+def get_embeddings_path(model_key: str, dataset_name: str) -> str:
+    os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+    return os.path.join(EMBEDDINGS_DIR, f"{model_key}_{dataset_name}.pkl")
+
+
+def embeddings_exist(model_key: str, dataset_name: str) -> bool:
+    return os.path.exists(get_embeddings_path(model_key, dataset_name))
+
+
+def generate_and_save_embeddings(
+        model_key: str,
+        dataset_name: str,
+        tok,
+        lm,
+        is_decoder_only: bool,
+        batch_size: int = 16,
+        max_len: int = MAX_LEN_CACHE,
+) -> list:
+
+    if dataset_name not in DATASET_LOADERS:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+
+    ds = DATASET_LOADERS[dataset_name]()
+    save_path = get_embeddings_path(model_key, dataset_name)
+
+    print(f"Generating embeddings for {model_key}/{dataset_name}...")
+    cached_data = []
+
+    for i in tqdm(range(0, len(ds), batch_size), desc=f"Batch processing"):
+        batch = ds[i:i + batch_size]
+
+        texts1 = [ex["text1"] for ex in batch]
+        texts2 = [ex["text2"] for ex in batch]
+        scores = [ex["score"] for ex in batch]
+
+        hs1_list, attn1_list, ids1_list = get_hidden_states_batch(
+            texts1, tok, lm, is_decoder_only, max_len
+        )
+        hs2_list, attn2_list, ids2_list = get_hidden_states_batch(
+            texts2, tok, lm, is_decoder_only, max_len
+        )
+
+        for j in range(len(batch)):
+            cached_data.append((
+                texts1[j],  texts2[j],
+                scores[j],
+                hs1_list[j], attn1_list[j], ids1_list[j],
+                hs2_list[j], attn2_list[j], ids2_list[j],
+            ))
+
+    with open(save_path, "wb") as f:
+        pickle.dump(cached_data, f)
+
+    print(f"Saved embeddings to {save_path}")
+    return cached_data
+
+
+def load_embeddings(model_key: str, dataset_name: str) -> list:
+    save_path = get_embeddings_path(model_key, dataset_name)
+    print(f"  Loading embeddings from {save_path}")
+    with open(save_path, "rb") as f:
+        return pickle.load(f)
+
+
+def get_or_generate_embeddings(
+        model_key: str,
+        dataset_name: str,
+        tok,
+        lm,
+        is_decoder_only: bool,
+        batch_size: int = 16,
+        max_len: int = MAX_LEN_CACHE,
+) -> list:
+    if embeddings_exist(model_key, dataset_name):
+        return load_embeddings(model_key, dataset_name)
+    else:
+        return generate_and_save_embeddings(
+            model_key, dataset_name, tok, lm, is_decoder_only,
+            batch_size, max_len
+        )
