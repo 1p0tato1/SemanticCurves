@@ -424,7 +424,6 @@ def get_layer_indices(config, user_layers_str: str) -> List[int]:
 # ============================================================
 # Helpers
 # ============================================================
-# Add to core.py
 
 @torch.no_grad()
 def get_hidden_states_batch(
